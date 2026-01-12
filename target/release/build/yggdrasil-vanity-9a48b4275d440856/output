@@ -1,0 +1,7 @@
+cargo:rerun-if-changed=kernel/curve25519-constants.cu
+cargo:rerun-if-changed=kernel/curve25519-constants2.cu
+cargo:rerun-if-changed=kernel/curve25519.cu
+cargo:rerun-if-changed=kernel/entry.cu
+cargo:rerun-if-changed=kernel/sha512.cu
+Compiled combined CUDA kernels to /root/yggdrasil-vanity/target/release/build/yggdrasil-vanity-9a48b4275d440856/out/kernels.ptx
+cargo:rustc-env=PTX_PATH_KERNELS=/root/yggdrasil-vanity/target/release/build/yggdrasil-vanity-9a48b4275d440856/out/kernels.ptx

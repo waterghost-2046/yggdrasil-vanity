@@ -30,23 +30,36 @@ fn main() {
         panic!("nvcc not found");
     }
 
-    // Compile all .cu files into a single PTX file
-    let combined_ptx_file = out_dir.join("kernels.ptx");
-
     // Tell Cargo to re-run this build script if any CUDA file changes.
     for cuda_file in &cuda_files {
         println!("cargo:rerun-if-changed={}", cuda_file.display());
     }
 
-    let mut command = Command::new("nvcc");
-    for cuda_file in cuda_files {
-        command.arg(cuda_file.to_str().unwrap());
+    // Option 1: Combine all .cu files into one, then compile
+    let combined_cu_file = out_dir.join("combined_kernels.cu");
+    let mut combined_content = String::new();
+    
+    for cuda_file in &cuda_files {
+        let content = fs::read_to_string(cuda_file)
+            .expect(&format!("Failed to read {}", cuda_file.display()));
+        combined_content.push_str(&format!("// From: {}\n", cuda_file.display()));
+        combined_content.push_str(&content);
+        combined_content.push_str("\n\n");
     }
+    
+    fs::write(&combined_cu_file, combined_content)
+        .expect("Failed to write combined CUDA file");
+
+    // Now compile the single combined file
+    let combined_ptx_file = out_dir.join("kernels.ptx");
+    
+    let mut command = Command::new("nvcc");
     command
+        .arg(combined_cu_file.to_str().unwrap())
         .arg("-ptx") // Compile to PTX
-        .arg("-arch=sm_35") // Specify a minimum CUDA architecture (adjust as needed)
         .arg("-o")
-        .arg(&combined_ptx_file);
+        .arg(&combined_ptx_file)
+        .arg("-Wno-deprecated-gpu-targets"); // Suppress the warning
 
     let output = command.output().expect("Failed to execute nvcc");
 

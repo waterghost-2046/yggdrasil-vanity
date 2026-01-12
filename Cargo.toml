@@ -12,7 +12,6 @@ license = "BSD-2-Clause"
 clap = { version = "4.5.8", features = ["derive"] }
 rand = "0.8.5"
 hex = "0.4.3"
-ocl = "0.19.7"
 cust = "0.3.2"
 regex = "1.10.5"
 rayon = "1.10.0"

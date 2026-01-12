@@ -1,23 +1,21 @@
 use std::{
-    ffi::CString,
     fs,
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::AtomicU8,
         mpsc, Arc, Mutex,
     },
     thread,
-    time::{self, Duration},
+    time,
 };
 
 use chrono::{SecondsFormat, Utc};
 use cust::{
-    context::{Context, ContextFlags},
-    device::{Device, DeviceAttribute},
+    context::Context,
+    device::Device,
     error::CudaResult,
-    function::Function,
     module::Module,
     stream::Stream,
-    memory::DeviceBuffer,
+    memory::{DeviceBuffer, CopyDestination},
 };
 use rand::RngCore;
 use rayon::prelude::*;
@@ -37,7 +35,6 @@ pub struct Gpu {
     _context: Context, // Context needs to be held by the Gpu struct to keep it alive
     _device: Device,
     module: Module,
-    function: Function,
     stream: Stream,
     results_buffer: DeviceBuffer<u8>,
     keys_buffer: DeviceBuffer<u8>,
@@ -48,31 +45,32 @@ impl Gpu {
     pub fn new(opts: GpuOptions) -> CudaResult<Gpu> {
         cust::init(cust::CudaFlags::empty())?;
 
-        let device = Device::get(opts.device_idx as i32)?;
-        let _context = Context::new(device, ContextFlags::SCHED_AUTO)?;
+        // Changed: Device::get -> Device::get_device
+        let device = Device::get_device(opts.device_idx as u32)?;
+        
+        // Changed: Context::new now takes only device
+        let _context = Context::new(device)?;
         let stream = Stream::new(cust::stream::StreamFlags::NON_BLOCKING, None)?;
 
         eprintln!("Initializing CUDA GPU {} {}", device.name()?, device.total_memory()?);
 
-        // Load PTX modules from embedded bytes.
-        // For simplicity, we are combining all kernel sources into one module
-        // as cust::Module::load_from_bytes expects a single PTX input.
-        // In a more complex scenario, you might have multiple modules.
+        // Load PTX modules from embedded bytes
         let ptx_bytes = include_bytes!(env!("PTX_PATH_KERNELS"));
+        
+        // Convert PTX bytes to string for Module::from_ptx
+        let ptx_string = String::from_utf8_lossy(ptx_bytes);
 
-        let module = Module::load_from_bytes(ptx_bytes)?;
+        // Changed: Module::load_from_bytes -> Module::from_ptx (expects &str)
+        let module = Module::from_ptx(ptx_string, &[])?;
 
-        let function_name = CString::new("generate_pubkey")?; // Name of the kernel function
-        let function = module.get_function(&function_name)?;
-
-        let results_buffer = unsafe { DeviceBuffer::new(&vec![0u8; 32 * opts.threads])? };
-        let keys_buffer = unsafe { DeviceBuffer::new(&vec![0u8; 32 * opts.threads])? };
+        // Changed: DeviceBuffer::new -> DeviceBuffer::zeroed
+        let results_buffer = DeviceBuffer::zeroed(32 * opts.threads)?;
+        let keys_buffer = DeviceBuffer::zeroed(32 * opts.threads)?;
 
         Ok(Gpu {
             _context,
             _device: device,
             module,
-            function,
             stream,
             results_buffer,
             keys_buffer,
@@ -81,32 +79,38 @@ impl Gpu {
     }
 
     pub fn compute(&mut self) -> CudaResult<()> {
-        let block_size = self.threads as u32; // This will likely need tuning
-        let grid_size = 1; // This will likely need tuning
+        let block_size = self.threads as u32;
+        let grid_size = 1;
 
         unsafe {
-            self.function.launch(
-                &self.stream,
-                [grid_size, 1, 1],
-                [block_size, 1, 1],
-                0, // shared memory
-                &[
-                    &self.results_buffer,
-                    &self.keys_buffer,
-                ],
-            )?;
+            // Get the function from the module
+            let function = self.module.get_function("generate_pubkey")?;
+            
+            let results_ptr = self.results_buffer.as_device_ptr();
+            let keys_ptr = self.keys_buffer.as_device_ptr();
+            
+            // The macro needs identifiers, so bind stream to a local variable
+            let stream = &self.stream;
+            
+            // Launch using the macro with local identifiers
+            cust::launch!(function<<<grid_size, block_size, 0, stream>>>(
+                results_ptr.as_raw(),
+                keys_ptr.as_raw()
+            ))?;
         }
         Ok(())
     }
 
     pub fn read_keys(&mut self, results: &mut [u8]) -> CudaResult<()> {
-        self.stream.memcpy_dtoh(results, &self.results_buffer)?;
+        // Changed: Added CopyDestination import for copy_to method
+        self.results_buffer.copy_to(results)?;
         self.stream.synchronize()?; // Synchronize to ensure data is transferred
         Ok(())
     }
 
     pub fn write_seeds(&mut self, keys: &[u8]) -> CudaResult<()> {
-        self.stream.memcpy_htod(&self.keys_buffer, keys)?;
+        // Changed: Added CopyDestination import for copy_from method
+        self.keys_buffer.copy_from(keys)?;
         Ok(())
     }
 }
